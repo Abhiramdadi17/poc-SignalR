@@ -17,3 +17,4 @@ packages/
 
 # SDD workspace (already gitignored within the dir, but belt+suspenders)
 .superpowers/
+docs/

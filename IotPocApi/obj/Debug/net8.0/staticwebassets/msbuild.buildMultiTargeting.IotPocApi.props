@@ -1,3 +1,0 @@
-﻿<Project>
-  <Import Project="..\build\IotPocApi.props" />
-</Project>

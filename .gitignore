@@ -1,0 +1,19 @@
+# Build artifacts
+bin/
+obj/
+
+# User-specific files
+*.user
+*.suo
+.vs/
+
+# NuGet
+*.nupkg
+packages/
+
+# IDE
+.idea/
+*.DotSettings.user
+
+# SDD workspace (already gitignored within the dir, but belt+suspenders)
+.superpowers/

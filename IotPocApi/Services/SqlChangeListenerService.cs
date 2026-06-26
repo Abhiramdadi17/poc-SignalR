@@ -58,7 +58,10 @@ public class SqlChangeListenerService : IHostedService
         if (e.Type == SqlNotificationType.Change)
         {
             var readings = FetchAll();
-            _ = _hubContext.Clients.All.SendAsync("SensorUpdated", readings);
+            var pushTask = _hubContext.Clients.All.SendAsync("SensorUpdated", readings);
+            _ = pushTask.ContinueWith(
+                t => _logger.LogError(t.Exception, "SignalR push to clients failed"),
+                TaskContinuationOptions.OnlyOnFaulted);
         }
         else
         {
@@ -69,7 +72,14 @@ public class SqlChangeListenerService : IHostedService
 
         // Re-register unconditionally — SqlDependency is one-shot; every notification
         // (change or housekeeping) requires a fresh registration or the listener dies.
-        RegisterDependency();
+        try
+        {
+            RegisterDependency();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to re-register SqlDependency; change listener is inactive");
+        }
     }
 
     private List<SensorReading> FetchAll()

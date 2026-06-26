@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IoT Sensor Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 16px 24px;
+    background: #1e293b; border-bottom: 1px solid #334155;
+  }
+  header h1 { font-size: 1.25rem; font-weight: 600; flex: 1; }
+
+  .pill {
+    padding: 4px 12px; border-radius: 9999px; font-size: 0.75rem; font-weight: 500;
+    white-space: nowrap;
+  }
+  .pill.connected    { background: #166534; color: #bbf7d0; }
+  .pill.reconnecting { background: #854d0e; color: #fef08a; }
+  .pill.disconnected { background: #7f1d1d; color: #fecaca; }
+
+  #simulate-btn {
+    padding: 8px 18px; border-radius: 6px; border: none; cursor: pointer;
+    background: #3b82f6; color: white; font-size: 0.875rem; font-weight: 500;
+  }
+  #simulate-btn:hover { background: #2563eb; }
+
+  #summary-bar {
+    display: flex; gap: 24px; padding: 12px 24px;
+    background: #1e293b; border-bottom: 1px solid #334155; font-size: 0.875rem;
+  }
+  .summary-item { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .dot-normal   { background: #22c55e; }
+  .dot-warning  { background: #f59e0b; }
+  .dot-critical { background: #ef4444; }
+  .dot-offline  { background: #6b7280; }
+
+  #sensor-grid { padding: 24px; }
+
+  .zone-section { margin-bottom: 32px; }
+  .zone-section h2 {
+    font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.08em; color: #64748b; margin-bottom: 12px;
+  }
+  .cards-row { display: flex; flex-wrap: wrap; gap: 12px; }
+
+  .sensor-card {
+    background: #1e293b; border: 1px solid #334155; border-radius: 8px;
+    padding: 14px 16px; min-width: 185px; flex: 0 0 auto;
+    transition: border-color 0.15s ease;
+  }
+  .sensor-card.flash { border-color: #3b82f6; }
+
+  .sensor-id { font-size: 0.68rem; color: #475569; font-family: monospace; }
+  .machine   { font-size: 0.875rem; font-weight: 600; margin: 3px 0 4px; }
+  .type      { font-size: 0.72rem; color: #94a3b8; margin-bottom: 10px; }
+  .val       { font-size: 1.3rem; font-weight: 700; color: #f1f5f9; margin-bottom: 8px; }
+
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .badge-normal   { background: #14532d; color: #86efac; }
+  .badge-warning  { background: #78350f; color: #fcd34d; }
+  .badge-critical { background: #7f1d1d; color: #fca5a5; }
+  .badge-offline  { background: #1f2937; color: #9ca3af; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>IoT Sensor Dashboard</h1>
+  <span id="conn-pill" class="pill disconnected">Connecting…</span>
+  <button id="simulate-btn">Simulate Changes</button>
+</header>
+
+<div id="summary-bar">
+  <div class="summary-item"><div class="dot dot-normal"></div>Normal: <strong id="cnt-normal">–</strong></div>
+  <div class="summary-item"><div class="dot dot-warning"></div>Warning: <strong id="cnt-warning">–</strong></div>
+  <div class="summary-item"><div class="dot dot-critical"></div>Critical: <strong id="cnt-critical">–</strong></div>
+  <div class="summary-item"><div class="dot dot-offline"></div>Offline: <strong id="cnt-offline">–</strong></div>
+</div>
+
+<div id="sensor-grid"></div>
+
+<script src="https://unpkg.com/@microsoft/signalr@8.0.0/dist/browser/signalr.min.js"></script>
+<script>
+const API = 'http://localhost:5000';
+
+// --- Connection indicator ---
+const pill = document.getElementById('conn-pill');
+function setConn(state) {
+  const map = {
+    connected:    { cls: 'connected',    text: '🟢 Connected' },
+    reconnecting: { cls: 'reconnecting', text: '🟡 Reconnecting…' },
+    disconnected: { cls: 'disconnected', text: '🔴 Disconnected — refresh to retry' },
+  };
+  const m = map[state] ?? map.disconnected;
+  pill.className = `pill ${m.cls}`;
+  pill.textContent = m.text;
+}
+
+// --- Summary bar ---
+function updateSummary(readings) {
+  const counts = { Normal: 0, Warning: 0, Critical: 0, Offline: 0 };
+  readings.forEach(r => { counts[r.status] = (counts[r.status] ?? 0) + 1; });
+  document.getElementById('cnt-normal').textContent   = counts.Normal;
+  document.getElementById('cnt-warning').textContent  = counts.Warning;
+  document.getElementById('cnt-critical').textContent = counts.Critical;
+  document.getElementById('cnt-offline').textContent  = counts.Offline;
+}
+
+// --- Card helpers ---
+function badgeCls(status) { return 'badge badge-' + status.toLowerCase(); }
+
+function buildCard(r) {
+  const div = document.createElement('div');
+  div.className = 'sensor-card';
+  div.id = 'card-' + r.sensorId;
+  div.innerHTML = `
+    <div class="sensor-id">${r.sensorId}</div>
+    <div class="machine">${r.machineName}</div>
+    <div class="type">${r.sensorType}</div>
+    <div class="val" data-val>${r.value} ${r.unit}</div>
+    <div class="${badgeCls(r.status)}" data-badge>${r.status}</div>
+  `;
+  return div;
+}
+
+function updateCard(r) {
+  const card = document.getElementById('card-' + r.sensorId);
+  if (!card) return;
+  card.querySelector('[data-val]').textContent = `${r.value} ${r.unit}`;
+  const badge = card.querySelector('[data-badge]');
+  badge.textContent = r.status;
+  badge.className = badgeCls(r.status);
+  card.classList.add('flash');
+  setTimeout(() => card.classList.remove('flash'), 600);
+}
+
+// --- Grid (initial render, grouped by zone) ---
+function renderGrid(readings) {
+  const grid = document.getElementById('sensor-grid');
+  grid.innerHTML = '';
+  const zones = {};
+  readings.forEach(r => { (zones[r.zone] ??= []).push(r); });
+  for (const [zone, sensors] of Object.entries(zones)) {
+    const section = document.createElement('div');
+    section.className = 'zone-section';
+    section.innerHTML = `<h2>${zone}</h2>`;
+    const row = document.createElement('div');
+    row.className = 'cards-row';
+    sensors.forEach(r => row.appendChild(buildCard(r)));
+    section.appendChild(row);
+    grid.appendChild(section);
+  }
+  updateSummary(readings);
+}
+
+// --- Initial data load ---
+fetch(`${API}/api/sensor`)
+  .then(r => r.json())
+  .then(data => renderGrid(data))
+  .catch(err => console.error('Initial load failed:', err));
+
+// --- SignalR ---
+// withAutomaticReconnect() is required for onreconnecting/onreconnected to fire.
+// Without it, a dropped connection goes straight to onclose with no retry.
+const connection = new signalR.HubConnectionBuilder()
+  .withUrl(`${API}/hubs/sensor`)
+  .withAutomaticReconnect()
+  .build();
+
+// Receives full array of all 20 rows in one message; update each card in-place.
+connection.on('SensorUpdated', readings => {
+  readings.forEach(r => updateCard(r));
+  updateSummary(readings);
+});
+
+connection.onreconnecting(() => setConn('reconnecting'));
+connection.onreconnected(() => setConn('connected'));
+connection.onclose(() => setConn('disconnected'));
+
+connection.start()
+  .then(() => setConn('connected'))
+  .catch(err => {
+    console.error('SignalR start failed:', err);
+    setConn('disconnected');
+  });
+
+// --- Simulate button ---
+// HTTP response confirms the SQL write. UI update arrives separately via SignalR.
+// These are completely decoupled — different channels, different timing.
+document.getElementById('simulate-btn').addEventListener('click', () => {
+  fetch(`${API}/api/sensor/simulate`, { method: 'POST' })
+    .catch(err => console.error('Simulate error:', err));
+});
+</script>
+</body>
+</html>
